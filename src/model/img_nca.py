@@ -151,7 +151,7 @@ class ImageNCA(eqx.Module):
 
     def alive_mask(self, cell_states):
         # Take the alpha channel as the measure of how alive a cell is.
-        return (self.max_pool(cell_states[3:4]) > self.alive_threshold)
+        return self.max_pool(cell_states[3:4]) > self.alive_threshold
 
     def train(self, mode=True):
         return eqx.tree_at(lambda x: x.training, self, mode)

@@ -259,7 +259,7 @@ def generate_growth_gif(
 
 
 def main(
-    emojis = "salamander",
+    target = "salamander",
     train_iters = 10000,
     eval_iters = 1,
     eval_freq = 100,
@@ -276,14 +276,14 @@ def main(
     np_rng, key = seed_everything(seed)
 
     if save_folder is None:
-        save_folder = osp.join("data", "logs", emojis, f"{time.strftime('%Y-%m-%d_%H-%M')}")
+        save_folder = osp.join("data", "logs", target, f"{time.strftime('%Y-%m-%d_%H-%M')}")
 
-    if emojis == "all":
+    if target == "all":
         n_targets = 10
     else:
         n_targets = 1
 
-    loader = create_dataest(emojis, img_size, img_pad, batch_size)
+    loader = create_dataest(target, img_size, img_pad, batch_size)
     model = create_model(img_size + 2 * img_pad, n_targets, 12, key)
 
     if osp.exists(save_folder) and not debug:
@@ -318,7 +318,7 @@ def main(
 if __name__ == "__main__":
     parser = ArgumentParser("salamander-gen")
 
-    parser.add_argument("--emojis", type=str, default="salamander")
+    parser.add_argument("--target", type=str, default="salamander")
     parser.add_argument("--train_iters", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=2e-3)

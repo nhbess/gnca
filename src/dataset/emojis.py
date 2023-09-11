@@ -13,13 +13,13 @@ from torch.utils.data import IterableDataset
 class Emoji(Enum):
     BANG = "💥"
     BUTTERFLY = "🦋"
-    TREE = "🎄"
     EYE = "👁"
     FISH = "🐠"
     LADYBUG = "🐞"
     PRETZEL = "🥨"
     SALAMANDER = "🦎"
     SMILEY = "😀"
+    TREE = "🎄"
     WEB = "🕸"
 
 
