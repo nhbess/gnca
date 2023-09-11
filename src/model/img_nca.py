@@ -22,20 +22,22 @@ class State(NamedTuple):
 
 class ImageNCA(eqx.Module):
     """
-    Neural Cellular Automata for image generation based on Mordintsev et al., (2021).
+    Neural Cellular Automata for image generation based on Mordvintsev et al., (2021).
 
     It grows images by using cellular automatas describing the color channels in each cell with
     the update rules being instantiated using parameterized neural networks. To generate different
-    images, the target class can be fed as input to the model as in Sudhakaran et al., (2023).
+    images, the target class can be fed as input to the model as in Sudhakaran et al., (2022).
 
     Args:
         img_size: size of the target image.
         filter: module that determines how information is shared amongst units.
-        goal_encoder: used to produce the encoding of the target class.
+        target_encoderr: used to produce the encoding of the target class.
         update_rule: function to perform state updates.
         update_prob: probability of performing an an update.
         alive_threshold: value of alive value beyond which a unit is considered part of the target
                          image or left empty.
+        generation_steps: the number of steps used for generation. If a range, a value will be
+                          sampled within its limits.
 
     """
     img_size: Tuple[int, int]
@@ -132,9 +134,9 @@ class ImageNCA(eqx.Module):
 
         masked_target = target_emb * pre_alive_mask
 
-        perception_vector = self.perceieve(cell_states)
+        perception_vector = self.perceieve(cell_states + masked_target)
         updates = self.update_rule(perception_vector)
-        new_states = cell_states + (updates + masked_target) * self.stochastic_update_mask(s_key)
+        new_states = cell_states + updates * self.stochastic_update_mask(s_key)
 
         alive_mask = (self.alive_mask(new_states) & pre_alive_mask).astype(jnp.float32)
 

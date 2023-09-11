@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 import time
+from functools import partial
 from argparse import ArgumentParser
 from typing import Callable
 
@@ -30,26 +31,44 @@ def seed_everything(seed=None):
 
 
 def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGKeyArray):
-    key1, key2, key3, key4 = jax.random.split(key, 4)
-
     state_size = hidden_state_size + 3 + 1
 
-    filter = SobelFilter()
-
+    # use architecture from Mordvintsev et al.
     if n_targets == 1:
+        key1, key2 = jax.random.split(key, 2)
+
+        filter = SobelFilter()
+
         target_encoder = lambda _: jnp.zeros((state_size,), dtype=np.float32)
-    else:
-        target_encoder = nn.Sequential([
-            nn.Linear(n_targets, 128, key=key3),
+
+        update_rule = nn.Sequential([
+            nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
             nn.Lambda(relu),
-            nn.Linear(128, state_size, key=key4),
+            nn.Conv2d(128, state_size, kernel_size=1, key=key2),
         ])
 
-    update_rule = nn.Sequential([
-        nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
-        nn.Lambda(relu),
-        nn.Conv2d(128, state_size, kernel_size=1, key=key2),
-    ])
+    # use the architecture from Shyam's code (except for the target encoder which is simpler)
+    else:
+        key_list = jax.random.split(key, 7)
+
+        filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
+
+        target_encoder = nn.Sequential([
+            nn.Linear(n_targets, 32, key=key_list[1]),
+            nn.Lambda(relu),
+            nn.Linear(32, 32, key=key_list[2]),
+            nn.Lambda(relu),
+            nn.Linear(32, state_size, key=key_list[3]),
+        ])
+
+        # deeper update rule
+        update_rule = nn.Sequential([
+            nn.Conv2d(3 * state_size, 64, kernel_size=1, key=key_list[4]),
+            nn.Lambda(relu),
+            nn.Conv2d(64, 64, kernel_size=1, key=key_list[5]),
+            nn.Lambda(relu),
+            nn.Conv2d(64, state_size, kernel_size=1, key=key_list[6]),
+        ])
 
     return ImageNCA(
         (img_size, img_size),
@@ -188,7 +207,17 @@ def load_model(model: eqx.Module, save_folder: str):
     return eqx.tree_deserialise_leaves(save_file, model)
 
 
-def to_viz(frames, scale=2):
+def to_viz(inputs, scale=2):
+    clip = partial(jnp.clip, a_min=0., a_max=1.)
+
+    def to_rgb(x):
+        # assume rgb premultiplied by alpha
+        rgb, a = clip(x[:3]), clip(x[3:4])
+        return 1.0 - a + rgb
+        # rgb, a = x[:3], x[3:4]
+        # return clip(1.0 - a + rgb)
+
+    frames = jax.device_put(jax.vmap(to_rgb)(inputs), jax.devices("cpu")[0])
     frames = np.transpose(np.asarray(frames), (0, 2, 3, 1))
     frames = np.repeat(frames, scale, 1)
     frames = np.repeat(frames, scale, 2)
@@ -206,16 +235,7 @@ def generate_growth_gif(
 
     _, gen_steps, _ = model.eval()(instance, key)
 
-    def to_alpha(x):
-        return jnp.clip(x[3:4], 0.0, 1.0)
-
-    def to_rgb(x):
-        # assume rgb premultiplied by alpha
-        rgb, a = x[:3], to_alpha(x)
-        return jnp.clip(1.0 - a + rgb, 0.0, 1.0)
-
-    frames = jax.device_put(jax.vmap(to_rgb)(gen_steps), jax.devices("cpu")[0])
-    frames = to_viz(frames)
+    frames = to_viz(gen_steps)
 
     fig = plt.figure()
     ax = plt.gca()
@@ -235,7 +255,7 @@ def generate_growth_gif(
         return im,
 
     ani = FuncAnimation(fig, animate, interval=200, blit=True, repeat=True, frames=len(frames))
-    ani.save(osp.join(save_folder, "salamander-growth.gif"), dpi=150, writer=PillowWriter(fps=8))
+    ani.save(osp.join(save_folder, "salamander-growth.gif"), dpi=150, writer=PillowWriter(fps=16))
 
 
 def main(
@@ -256,7 +276,7 @@ def main(
     np_rng, key = seed_everything(seed)
 
     if save_folder is None:
-        save_folder = osp.join("data", "logs", "salamander", f"{time.strftime('%Y-%m-%d_%H-%M')}")
+        save_folder = osp.join("data", "logs", emojis, f"{time.strftime('%Y-%m-%d_%H-%M')}")
 
     if emojis == "all":
         n_targets = 10
@@ -273,7 +293,16 @@ def main(
         os.makedirs(save_folder, exist_ok=debug)
 
         best_params = train(
-            model, loader, loader, lr, grad_accum, train_iters, eval_iters, eval_freq, print_every, np_rng
+            model,
+            loader,
+            loader,
+            lr,
+            grad_accum,
+            train_iters,
+            eval_iters,
+            eval_freq,
+            print_every,
+            np_rng,
         )
 
         trained_model = eqx.combine(best_params, model)
