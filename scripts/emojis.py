@@ -24,90 +24,66 @@ from src.model.img_nca import ImageNCA
 from src.nn.sobel import SobelFilter
 
 
+def main(
+    target = "salamander",
+    train_iters = 10000,
+    eval_iters = 1,
+    eval_freq = 100,
+    batch_size = 8,
+    lr = 2e-3,
+    grad_accum = 1,
+    img_size = 40,
+    img_pad = 16,
+    print_every = 1,
+    save_folder = None,
+    seed = None,
+    debug = False,
+):
+    np_rng, key = seed_everything(seed)
+
+    if save_folder is None:
+        save_folder = osp.join("data", "logs", target, f"{time.strftime('%Y-%m-%d_%H-%M')}")
+
+    if target == "all":
+        n_targets = 10
+    else:
+        n_targets = 1
+
+    loader = create_dataest(target, img_size, img_pad, batch_size)
+    model = create_model(img_size + 2 * img_pad, n_targets, 12, key)
+
+    if osp.exists(save_folder) and not debug:
+        trained_model = load_model(model, save_folder)
+
+    else:
+        os.makedirs(save_folder, exist_ok=debug)
+
+        best_params = train(
+            model,
+            loader,
+            loader,
+            lr,
+            grad_accum,
+            train_iters,
+            eval_iters,
+            eval_freq,
+            print_every,
+            np_rng,
+        )
+
+        trained_model = eqx.combine(best_params, model)
+        save_model(trained_model, save_folder)
+
+    eval_loss = evaluate(trained_model, loader, optax.l2_loss, 14, np_rng)
+    print(f"Trained model loss: {eval_loss}")
+
+    visualization(trained_model, loader, save_folder, np_rng)
+
+
 def seed_everything(seed=None):
     np_rng = np.random.default_rng(seed)
     jax_key = jax.random.PRNGKey(np_rng.integers(0, 2 ** 32 - 1))
     return np_rng, jax_key
-
-
-def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGKeyArray):
-    state_size = hidden_state_size + 3 + 1
-
-    # use architecture from Mordvintsev et al.
-    if n_targets == 1:
-        key1, key2 = jax.random.split(key, 2)
-
-        filter = SobelFilter()
-
-        target_encoder = lambda _: jnp.zeros((state_size,), dtype=np.float32)
-
-        update_rule = nn.Sequential([
-            nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
-            nn.Lambda(relu),
-            nn.Conv2d(128, state_size, kernel_size=1, key=key2),
-        ])
-
-    # use the architecture from Shyam's code (except for the target encoder which is simpler)
-    else:
-        key_list = jax.random.split(key, 7)
-
-        filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
-
-        target_encoder = nn.Sequential([
-            nn.Linear(n_targets, 32, key=key_list[1]),
-            nn.Lambda(relu),
-            nn.Linear(32, 32, key=key_list[2]),
-            nn.Lambda(relu),
-            nn.Linear(32, state_size, key=key_list[3]),
-        ])
-
-        # deeper update rule
-        update_rule = nn.Sequential([
-            nn.Conv2d(3 * state_size, 64, kernel_size=1, key=key_list[4]),
-            nn.Lambda(relu),
-            nn.Conv2d(64, 64, kernel_size=1, key=key_list[5]),
-            nn.Lambda(relu),
-            nn.Conv2d(64, state_size, kernel_size=1, key=key_list[6]),
-        ])
-
-    return ImageNCA(
-        (img_size, img_size),
-        hidden_state_size,
-        filter,
-        target_encoder,  # currently not being used
-        update_rule,
-        update_prob=0.5,
-        alive_threshold=0.1,
-        generation_steps=(64, 96),
-    )
-
-
-def create_dataest(emojis: str, target_size: int, img_pad: int, batch_size: int):
-    if emojis == "all":
-        dataset = EmojiDataset(target_size, img_pad, batch_size)
-    else:
-        dataset = SingleEmojiDataset(emojis, target_size, img_pad, batch_size)
-
-    # emoji = dataset.get_emoji()[1][0]
-    # plt.imshow(np.transpose(emoji, (1, 2, 0)))
-    # plt.show()
-
-    return JaxLoader(dataset, None, collate_fn=lambda x: x)
-
-
-def infinite_trainloader(loader: JaxLoader):
-    while True:
-        yield from loader
-
-
-def compute_loss(model: Callable, loss: Callable, x: Array, y: Array, key: jr.PRNGKeyArray):
-    batch_key = jr.split(key, x.shape[0])
-    preds, _, _ = jax.vmap(model)(x, batch_key)
-    return jnp.sum(loss(preds, y)) / len(y)
-
-
-def model_params(model: eqx.Module):
-    return eqx.partition(model, eqx.is_array)[0]
 
 
 def train(
@@ -191,6 +167,86 @@ def evaluate(model: ImageNCA, loader: JaxLoader, loss: Callable, iters: int, rng
     return total_loss / total_examples
 
 
+def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGKeyArray):
+    state_size = hidden_state_size + 3 + 1
+
+    # use architecture from Mordvintsev et al.
+    if n_targets == 1:
+        key1, key2 = jax.random.split(key, 2)
+
+        filter = SobelFilter()
+
+        target_encoder = lambda _: jnp.zeros((state_size,), dtype=np.float32)
+
+        update_rule = nn.Sequential([
+            nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
+            nn.Lambda(relu),
+            nn.Conv2d(128, state_size, kernel_size=1, key=key2),
+        ])
+
+    # use the architecture from Shyam's code (except for the target encoder which is simpler)
+    else:
+        key_list = jax.random.split(key, 7)
+
+        filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
+
+        target_encoder = nn.Sequential([
+            nn.Linear(n_targets, 32, key=key_list[1]),
+            nn.Lambda(relu),
+            nn.Linear(32, 32, key=key_list[2]),
+            nn.Lambda(relu),
+            nn.Linear(32, state_size, key=key_list[3]),
+        ])
+
+        # deeper update rule
+        update_rule = nn.Sequential([
+            nn.Conv2d(3 * state_size, 64, kernel_size=1, key=key_list[4]),
+            nn.Lambda(relu),
+            nn.Conv2d(64, 64, kernel_size=1, key=key_list[5]),
+            nn.Lambda(relu),
+            nn.Conv2d(64, state_size, kernel_size=1, key=key_list[6]),
+        ])
+
+    return ImageNCA(
+        (img_size, img_size),
+        hidden_state_size,
+        filter,
+        target_encoder,  # currently not being used
+        update_rule,
+        update_prob=0.5,
+        alive_threshold=0.1,
+        generation_steps=(64, 96),
+    )
+
+
+def create_dataest(emojis: str, target_size: int, img_pad: int, batch_size: int):
+    if emojis == "all":
+        dataset = EmojiDataset(target_size, img_pad, batch_size)
+    else:
+        dataset = SingleEmojiDataset(emojis, target_size, img_pad, batch_size)
+
+    # emoji = dataset.get_emoji()[1][0]
+    # plt.imshow(np.transpose(emoji, (1, 2, 0)))
+    # plt.show()
+
+    return JaxLoader(dataset, None, collate_fn=lambda x: x)
+
+
+def infinite_trainloader(loader: JaxLoader):
+    while True:
+        yield from loader
+
+
+def compute_loss(model: Callable, loss: Callable, x: Array, y: Array, key: jr.PRNGKeyArray):
+    batch_key = jr.split(key, x.shape[0])
+    preds, _, _ = jax.vmap(model)(x, batch_key)
+    return jnp.sum(loss(preds, y)) / len(y)
+
+
+def model_params(model: eqx.Module):
+    return eqx.partition(model, eqx.is_array)[0]
+
+
 def save_model(model: eqx.Module, save_folder: str):
     save_file = osp.join(save_folder, "best_model.eqx")
     eqx.tree_serialise_leaves(save_file, model)
@@ -207,7 +263,23 @@ def load_model(model: eqx.Module, save_folder: str):
     return eqx.tree_deserialise_leaves(save_file, model)
 
 
-def to_viz(inputs, scale=2):
+def visualization(model: eqx.Module, loader: JaxLoader, save_folder: str, rng: np.random.Generator):
+    key = jr.PRNGKey(rng.integers(0, 2 ** 32 - 1))
+    instance = next(iter(loader))[0][0]
+
+    output, gen_steps, _ = model.eval()(instance, key)
+
+    output = to_img(output[jnp.newaxis])
+    frames = to_img(gen_steps)
+
+    fig = generate_fig(output)
+    fig.savefig(osp.join(save_folder, "generation.png"))
+
+    ani = generate_growth_gif(frames)
+    ani.save(osp.join(save_folder, "example-growth.gif"), dpi=150, writer=PillowWriter(fps=16))
+
+
+def to_img(inputs, scale=2):
     clip = partial(jnp.clip, a_min=0., a_max=1.)
 
     def to_rgb(x):
@@ -224,29 +296,19 @@ def to_viz(inputs, scale=2):
     return frames
 
 
-def generate_growth_gif(
-    model: ImageNCA,
-    loader: JaxLoader,
-    save_folder: str,
-    rng: np.random.Generator
-):
-    key = jr.PRNGKey(rng.integers(0, 2 ** 32 - 1))
-    instance = next(iter(loader))[0][0]
+def generate_fig(output: np.ndarray):
+    fig = plt.figure()
+    ax = plt.gca()
+    strip(ax)
+    plt.imshow(output, vmin=0, vmax=1)
+    return fig
 
-    _, gen_steps, _ = model.eval()(instance, key)
 
-    frames = to_viz(gen_steps)
-
+def generate_growth_gif(frames: np.ndarray):
     fig = plt.figure()
     ax = plt.gca()
 
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.spines['bottom'].set_visible(False)
-
-    ax.set_xticks([])
-    ax.set_yticks([])
+    strip(ax)
 
     im = plt.imshow(frames[0], vmin=0, vmax=1)
     def animate(i):
@@ -254,65 +316,17 @@ def generate_growth_gif(
         im.set_array(frames[i])
         return im,
 
-    ani = FuncAnimation(fig, animate, interval=200, blit=True, repeat=True, frames=len(frames))
-    ani.save(osp.join(save_folder, "salamander-growth.gif"), dpi=150, writer=PillowWriter(fps=16))
+    return FuncAnimation(fig, animate, interval=200, blit=True, repeat=True, frames=len(frames))
 
 
-def main(
-    target = "salamander",
-    train_iters = 10000,
-    eval_iters = 1,
-    eval_freq = 100,
-    batch_size = 8,
-    lr = 2e-3,
-    grad_accum = 1,
-    img_size = 40,
-    img_pad = 16,
-    print_every = 1,
-    save_folder = None,
-    seed = None,
-    debug = False,
-):
-    np_rng, key = seed_everything(seed)
+def strip(ax):
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
 
-    if save_folder is None:
-        save_folder = osp.join("data", "logs", target, f"{time.strftime('%Y-%m-%d_%H-%M')}")
-
-    if target == "all":
-        n_targets = 10
-    else:
-        n_targets = 1
-
-    loader = create_dataest(target, img_size, img_pad, batch_size)
-    model = create_model(img_size + 2 * img_pad, n_targets, 12, key)
-
-    if osp.exists(save_folder) and not debug:
-        trained_model = load_model(model, save_folder)
-
-    else:
-        os.makedirs(save_folder, exist_ok=debug)
-
-        best_params = train(
-            model,
-            loader,
-            loader,
-            lr,
-            grad_accum,
-            train_iters,
-            eval_iters,
-            eval_freq,
-            print_every,
-            np_rng,
-        )
-
-        trained_model = eqx.combine(best_params, model)
-        save_model(trained_model, save_folder)
-
-
-    eval_loss = evaluate(trained_model, loader, optax.l2_loss, 14, np_rng)
-    print(f"Trained model loss: {eval_loss}")
-
-    generate_growth_gif(trained_model, loader, save_folder, np_rng)
+    ax.set_xticks([])
+    ax.set_yticks([])
 
 
 if __name__ == "__main__":

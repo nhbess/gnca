@@ -121,6 +121,11 @@ class ImageNCA(eqx.Module):
             key
         )
 
+    # def get_target_embedding(self, inputs):
+    #     mask = jnp.repeat(jnp.asarray([0, 1]), jnp.asarray([4, self.state_size - 4]))
+    #     emb = self.target_encoder(inputs) * mask
+    #     return emb[..., jnp.newaxis, jnp.newaxis]
+
     def init_state(self, key) -> State:
         H, W = self.img_size
         cell_states = jnp.zeros((self.state_size, *self.img_size)).at[3:, H // 2, W // 2].set(1.0)
@@ -132,9 +137,7 @@ class ImageNCA(eqx.Module):
         # prevent the NCA from growing correctly.
         pre_alive_mask =  self.alive_mask(cell_states)
 
-        masked_target = target_emb * pre_alive_mask
-
-        perception_vector = self.perceieve(cell_states + masked_target)
+        perception_vector = self.perceieve(cell_states + target_emb * pre_alive_mask)
         updates = self.update_rule(perception_vector)
         new_states = cell_states + updates * self.stochastic_update_mask(s_key)
 
