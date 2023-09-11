@@ -3,7 +3,7 @@ import os.path as osp
 import time
 from functools import partial
 from argparse import ArgumentParser
-from typing import Callable
+from typing import Callable, Union
 
 import numpy as np
 import jax
@@ -77,7 +77,7 @@ def main(
     eval_loss = evaluate(trained_model, loader, optax.l2_loss, 14, np_rng)
     print(f"Trained model loss: {eval_loss}")
 
-    visualization(trained_model, loader, save_folder, np_rng)
+    visualization(trained_model, loader.dataset, save_folder, np_rng)
 
 
 def seed_everything(seed=None):
@@ -100,12 +100,11 @@ def train(
 ) -> ImageNCA:
 
     loss = optax.l2_loss
-    # adam = optax.adam(optax.piecewise_constant_schedule(lr, {2000: 0.1}))
-    adam = optax.adam(lr)
 
     optim = optax.chain(
         optax.clip_by_global_norm(1.0),
-        adam,
+        optax.adam(lr),
+        # optax.adam(optax.piecewise_constant_schedule(lr, {2000: 0.1})),
     )
 
     if grad_accum > 1:
@@ -263,20 +262,35 @@ def load_model(model: eqx.Module, save_folder: str):
     return eqx.tree_deserialise_leaves(save_file, model)
 
 
-def visualization(model: eqx.Module, loader: JaxLoader, save_folder: str, rng: np.random.Generator):
-    key = jr.PRNGKey(rng.integers(0, 2 ** 32 - 1))
-    instance = next(iter(loader))[0][0]
+def visualization(
+    model: ImageNCA,
+    dataset: Union[EmojiDataset, SingleEmojiDataset],
+    save_folder: str,
+    rng: np.random.Generator
+):
+    if isinstance(dataset, SingleEmojiDataset):
+        names = [dataset.emoji_name]
+        inputs = dataset.get_emoji()[0][0]
+    else:
+        names = dataset.emoji_names
+        inputs = [dataset.get_emoji(i)[0][0] for i in range(len(dataset.emojis))]
 
-    output, gen_steps, _ = model.eval()(instance, key)
+    model = model.eval()
+    inputs = jnp.stack(inputs)
 
-    output = to_img(output[jnp.newaxis])
-    frames = to_img(gen_steps)
+    for (n, i) in zip(names, inputs):
+        key = jr.PRNGKey(rng.integers(0, 2 ** 32 - 1))
 
-    fig = generate_fig(output)
-    fig.savefig(osp.join(save_folder, "generation.png"))
+        output, gen_steps, _ = model(i, key)
 
-    ani = generate_growth_gif(frames)
-    ani.save(osp.join(save_folder, "example-growth.gif"), dpi=150, writer=PillowWriter(fps=16))
+        output = to_img(output[jnp.newaxis])[0]
+        frames = to_img(gen_steps)
+
+        fig = generate_fig(output)
+        fig.savefig(osp.join(save_folder, f"{n}-generation.png"))
+
+        ani = generate_growth_gif(frames)
+        ani.save(osp.join(save_folder, f"{n}-growth.gif"), dpi=150, writer=PillowWriter(fps=16))
 
 
 def to_img(inputs, scale=2):

@@ -90,8 +90,11 @@ class EmojiDataset(IterableDataset):
         while True:
             yield self.get_emoji()
 
-    def get_emoji(self):
-        idxs = self.rng.choice(len(self.emojis), (self.batch_size,), replace=True)
+    def get_emoji(self, i=None):
+        if i is None:
+            idxs = self.rng.choice(len(self.emojis), (self.batch_size,), replace=True)
+        else:
+            idxs = np.asarray([i])
 
         inputs = one_hot(idxs, len(Emoji))
         targets = np.asarray([self.emojis[i] for i in idxs])
