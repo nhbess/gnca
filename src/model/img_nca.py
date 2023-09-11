@@ -90,6 +90,7 @@ class ImageNCA(eqx.Module):
 
         g_steps = self.sample_generation_steps(steps_key)
         init_state = self.init_state(state_key)
+        target_emb = self.target_encoder(inputs)[..., jnp.newaxis, jnp.newaxis]  # tiling
 
         def f(carry: State, _):
             iter, cell_states, key = carry
@@ -99,8 +100,8 @@ class ImageNCA(eqx.Module):
             cell_states = lax.cond(
                 iter < g_steps,
                 self.update_cell_states,
-                lambda cg, _: cg,
-                cell_states, s_key
+                lambda cg, *_: cg,
+                cell_states, target_emb, s_key
             )
 
             return State(iter + 1, cell_states, c_key), cell_states[:4]
@@ -123,15 +124,17 @@ class ImageNCA(eqx.Module):
         cell_states = jnp.zeros((self.state_size, *self.img_size)).at[3:, H // 2, W // 2].set(1.0)
         return State(0, cell_states, key)
 
-    def update_cell_states(self, cell_states, s_key):
+    def update_cell_states(self, cell_states, target_emb, s_key):
         # NOTE: This pre alive mask is not described in the article. I imagine it helps with
         # stability. Notice that because the mask is computed using pooling this does not
         # prevent the NCA from growing correctly.
         pre_alive_mask =  self.alive_mask(cell_states)
 
+        masked_target = target_emb * pre_alive_mask
+
         perception_vector = self.perceieve(cell_states)
         updates = self.update_rule(perception_vector)
-        new_states = cell_states + updates * self.stochastic_update_mask(s_key)
+        new_states = cell_states + (updates + masked_target) * self.stochastic_update_mask(s_key)
 
         alive_mask = (self.alive_mask(new_states) & pre_alive_mask).astype(jnp.float32)
 

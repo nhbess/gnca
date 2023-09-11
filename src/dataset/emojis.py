@@ -1,15 +1,26 @@
 import io
 import requests
+from functools import partial
 from PIL import Image
 from enum import Enum
-from typing import Union
+from typing import Optional, Union
 
 import numpy as np
+from numpy.random import Generator
 from torch.utils.data import IterableDataset
 
 
 class Emoji(Enum):
+    BANG = "💥"
+    BUTTERFLY = "🦋"
+    TREE = "🎄"
+    EYE = "👁"
+    FISH = "🐠"
+    LADYBUG = "🐞"
+    PRETZEL = "🥨"
     SALAMANDER = "🦎"
+    SMILEY = "😀"
+    WEB = "🕸"
 
 
 class SingleEmojiDataset(IterableDataset):
@@ -18,11 +29,16 @@ class SingleEmojiDataset(IterableDataset):
         emoji: Union[str, Emoji],
         target_size: int = 40,
         pad: int = 16,
-        batch_size: int = 64
+        batch_size: int = 64,
+        rng: Optional[Generator] = None,
     ) -> None:
         super().__init__()
+
         if isinstance(emoji, str):
             emoji = Emoji[emoji.upper()]
+
+        if rng is None:
+            rng = np.random.default_rng()
 
         emoji_image = load_emoji(emoji.value, target_size)
 
@@ -30,6 +46,7 @@ class SingleEmojiDataset(IterableDataset):
         self.emoji_name = emoji.name
         self.target_size = target_size
         self.batch_size = batch_size
+        self.rng = rng
 
     def __iter__(self):
         while True:
@@ -42,7 +59,53 @@ class SingleEmojiDataset(IterableDataset):
         return inputs, np.transpose(targets, [0, 3, 1, 2])  # NCHW
 
 
+class EmojiDataset(IterableDataset):
+    def __init__(
+        self,
+        target_size: int = 40,
+        pad: int = 16,
+        batch_size: int = 64,
+        rng: Optional[Generator] = None
+    ) -> None:
+        super().__init__()
+
+        if rng is None:
+            rng = np.random.default_rng()
+
+        pad_fn = partial(np.pad, pad_width=((pad, pad), (pad, pad), (0, 0)), mode="constant")
+        def init_emojis(emoji):
+            emoji = load_emoji(emoji.value, target_size)
+            return pad_fn(emoji)
+
+        emojis = tuple(map(init_emojis, Emoji))
+        emoji_names = (e.name for e in Emoji)
+
+        self.emojis = emojis
+        self.emoji_names = emoji_names
+        self.target_size = target_size
+        self.batch_size = batch_size
+        self.rng = rng
+
+    def __iter__(self):
+        while True:
+            yield self.get_emoji()
+
+    def get_emoji(self):
+        idxs = self.rng.choice(len(self.emojis), (self.batch_size,), replace=True)
+
+        inputs = one_hot(idxs, len(Emoji))
+        targets = np.asarray([self.emojis[i] for i in idxs])
+
+        return inputs, np.transpose(targets, [0, 3, 1, 2])
+
+
 # Code from https://colab.research.google.com/github/google-research/self-organising-systems
+
+def one_hot(values, max):
+    b = np.zeros((len(values), max))
+    b[np.arange(len(values)), values] = 1.0
+    return b
+
 
 def load_emoji(emoji, max_size):
     code = hex(ord(emoji))[2:].lower()

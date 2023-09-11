@@ -17,7 +17,7 @@ from jax import config
 from jaxtyping import Array, Float, Int, PyTree
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-from src.dataset.emojis import SingleEmojiDataset
+from src.dataset.emojis import EmojiDataset, SingleEmojiDataset
 from src.dataset.dataloader import JaxLoader
 from src.model.img_nca import ImageNCA
 from src.nn.sobel import SobelFilter
@@ -29,13 +29,22 @@ def seed_everything(seed=None):
     return np_rng, jax_key
 
 
-def create_model(img_size: int, hidden_state_size: int, key: jr.PRNGKeyArray):
-    key1, key2 = jax.random.split(key, 2)
+def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGKeyArray):
+    key1, key2, key3, key4 = jax.random.split(key, 4)
 
     state_size = hidden_state_size + 3 + 1
 
     filter = SobelFilter()
-    goal_encoder = None
+
+    if n_targets == 1:
+        target_encoder = lambda _: jnp.zeros((state_size,), dtype=np.float32)
+    else:
+        target_encoder = nn.Sequential([
+            nn.Linear(n_targets, 128, key=key3),
+            nn.Lambda(relu),
+            nn.Linear(128, state_size, key=key4),
+        ])
+
     update_rule = nn.Sequential([
         nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
         nn.Lambda(relu),
@@ -46,7 +55,7 @@ def create_model(img_size: int, hidden_state_size: int, key: jr.PRNGKeyArray):
         (img_size, img_size),
         hidden_state_size,
         filter,
-        goal_encoder,  # currently not being used
+        target_encoder,  # currently not being used
         update_rule,
         update_prob=0.5,
         alive_threshold=0.1,
@@ -54,8 +63,11 @@ def create_model(img_size: int, hidden_state_size: int, key: jr.PRNGKeyArray):
     )
 
 
-def create_dataest(target_size: int, img_pad: int, batch_size: int):
-    dataset = SingleEmojiDataset("salamander", target_size, img_pad, batch_size)
+def create_dataest(emojis: str, target_size: int, img_pad: int, batch_size: int):
+    if emojis == "all":
+        dataset = EmojiDataset(target_size, img_pad, batch_size)
+    else:
+        dataset = SingleEmojiDataset(emojis, target_size, img_pad, batch_size)
 
     # emoji = dataset.get_emoji()[1][0]
     # plt.imshow(np.transpose(emoji, (1, 2, 0)))
@@ -143,7 +155,6 @@ def train(
 
             print(print_str)
 
-
     return best_model
 
 
@@ -228,6 +239,7 @@ def generate_growth_gif(
 
 
 def main(
+    emojis = "salamander",
     train_iters = 10000,
     eval_iters = 1,
     eval_freq = 100,
@@ -246,8 +258,13 @@ def main(
     if save_folder is None:
         save_folder = osp.join("data", "logs", "salamander", f"{time.strftime('%Y-%m-%d_%H-%M')}")
 
-    loader = create_dataest(img_size, img_pad, batch_size)
-    model = create_model(img_size + 2 * img_pad, 12, key)
+    if emojis == "all":
+        n_targets = 10
+    else:
+        n_targets = 1
+
+    loader = create_dataest(emojis, img_size, img_pad, batch_size)
+    model = create_model(img_size + 2 * img_pad, n_targets, 12, key)
 
     if osp.exists(save_folder) and not debug:
         trained_model = load_model(model, save_folder)
@@ -272,6 +289,7 @@ def main(
 if __name__ == "__main__":
     parser = ArgumentParser("salamander-gen")
 
+    parser.add_argument("--emojis", type=str, default="salamander")
     parser.add_argument("--train_iters", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=2e-3)
@@ -294,7 +312,7 @@ if __name__ == "__main__":
         args.print_every = 1
         args.save_folder = osp.join("data", "logs", "salamander", "debug")
 
-    disable_jit = args.__dict__.pop("diseble_jit")
+    disable_jit = args.__dict__.pop("disable_jit")
     if disable_jit:
         config.update('jax_disable_jit', True)
 
