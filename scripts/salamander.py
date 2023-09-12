@@ -1,4 +1,10 @@
 import os
+import sys
+
+wspath = 'C:/Users/nbes/Documents/GitHub/gnca'
+#change this to the path of the gnca folder on your computer
+sys.path.append(wspath)
+
 import os.path as osp
 import time
 from argparse import ArgumentParser
