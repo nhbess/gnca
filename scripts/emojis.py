@@ -31,6 +31,7 @@ def main(
     eval_freq = 100,
     batch_size = 8,
     lr = 2e-3,
+    use_lr_schedule = False,
     grad_accum = 1,
     img_size = 40,
     img_pad = 16,
@@ -64,6 +65,7 @@ def main(
             loader,
             loader,
             lr,
+            use_lr_schedule,
             grad_accum,
             train_iters,
             eval_iters,
@@ -92,6 +94,7 @@ def train(
     train_loader: JaxLoader,
     testloader: JaxLoader,
     lr: float,
+    use_lr_schedule: bool,
     grad_accum: int,
     train_iters: int,
     eval_iters: int,
@@ -102,9 +105,17 @@ def train(
 
     loss = optax.l2_loss
 
+    if use_lr_schedule:
+        warmup_iters = int(train_iters * 0.2)
+        lr_or_schedule = optax.warmup_cosine_decay_schedule(
+            0.0, lr, warmup_iters, train_iters, lr / 10 ** 2
+        )
+    else:
+        lr_or_schedule = lr
+
     optim = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adam(lr),
+        optax.adamw(lr_or_schedule),
         # optax.adam(optax.piecewise_constant_schedule(lr, {2000: 0.1})),
     )
 
@@ -368,6 +379,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_iters", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=2e-3)
+    parser.add_argument("--use_lr_schedule", action="store_true", default=False)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--eval_iters", type=int, default=10)
     parser.add_argument("--eval_freq", type=int, default=10)
