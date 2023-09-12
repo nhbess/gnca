@@ -22,7 +22,7 @@ class State(NamedTuple):
 
 class ImageNCA(eqx.Module):
     """
-    Neural Cellular Automata for image generation based on Mordvintsev et al., (2021).
+    Neural Cellular Automata for image generation based on Mordvintsev et al., (2020).
 
     It grows images by using cellular automatas describing the color channels in each cell with
     the update rules being instantiated using parameterized neural networks. To generate different
@@ -92,7 +92,9 @@ class ImageNCA(eqx.Module):
 
         g_steps = self.sample_generation_steps(steps_key)
         init_state = self.init_state(state_key)
-        target_emb = self.target_encoder(inputs)[..., jnp.newaxis, jnp.newaxis]  # tiling
+        target_emb = self.target_embedding(inputs)
+        # NOTE: Revert back to this if above idea does not work
+        # target_emb = self.target_encoder(inputs)[..., jnp.newaxis, jnp.newaxis]  # tiling
 
         def f(carry: State, _):
             iter, cell_states, key = carry
@@ -113,6 +115,11 @@ class ImageNCA(eqx.Module):
         # image at target generation step, full output history and final state
         return outputs[g_steps], outputs, final_state
 
+    def init_state(self, key) -> State:
+        H, W = self.img_size
+        cell_states = jnp.zeros((self.state_size, *self.img_size)).at[3:, H // 2, W // 2].set(1.0)
+        return State(0, cell_states, key)
+
     def sample_generation_steps(self, key: jr.PRNGKeyArray):
         return lax.cond(
             self.training,
@@ -121,15 +128,15 @@ class ImageNCA(eqx.Module):
             key
         )
 
-    # def get_target_embedding(self, inputs):
-    #     mask = jnp.repeat(jnp.asarray([0, 1]), jnp.asarray([4, self.state_size - 4]))
-    #     emb = self.target_encoder(inputs) * mask
-    #     return emb[..., jnp.newaxis, jnp.newaxis]
+    def target_embedding(self, inputs):
+        emb = self.target_encoder(inputs)
+        emb = jnp.concatenate((jnp.zeros((4,)), emb), axis=0)  # assume RGBA channels are missing
 
-    def init_state(self, key) -> State:
-        H, W = self.img_size
-        cell_states = jnp.zeros((self.state_size, *self.img_size)).at[3:, H // 2, W // 2].set(1.0)
-        return State(0, cell_states, key)
+        # NOTE: It might be better to just mask out the channel dimensions.
+        # mask = jnp.repeat(jnp.asarray([0, 1]), jnp.asarray([4, self.state_size - 4]))
+        # emb = self.target_encoder(inputs) * mask
+
+        return emb[..., jnp.newaxis, jnp.newaxis]  # tile via broadcasting
 
     def update_cell_states(self, cell_states, target_emb, s_key):
         # NOTE: This pre alive mask is not described in the article. I imagine it helps with

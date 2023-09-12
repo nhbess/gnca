@@ -152,7 +152,13 @@ def train(
     return best_model
 
 
-def evaluate(model: ImageNCA, loader: JaxLoader, loss: Callable, iters: int, rng: np.random.Generator):
+def evaluate(
+    model: ImageNCA,
+    loader: JaxLoader,
+    loss: Callable,
+    iters: int,
+    rng: np.random.Generator,
+):
     model = model.eval()
     total_loss, total_examples = 0.0, 0
 
@@ -175,7 +181,8 @@ def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGK
 
         filter = SobelFilter()
 
-        target_encoder = lambda _: jnp.zeros((state_size,), dtype=np.float32)
+        # we use hidden state size since we will pre-ppend zeros for the RGBA channels
+        target_encoder = lambda _: jnp.zeros((hidden_state_size,), dtype=np.float32)
 
         update_rule = nn.Sequential([
             nn.Conv2d(state_size + 2 * state_size, 128, kernel_size=1, key=key1),
@@ -189,12 +196,13 @@ def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGK
 
         filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
 
+        # we use hidden state size since we will pre-ppend zeros for the RGBA channels
         target_encoder = nn.Sequential([
             nn.Linear(n_targets, 32, key=key_list[1]),
             nn.Lambda(relu),
             nn.Linear(32, 32, key=key_list[2]),
             nn.Lambda(relu),
-            nn.Linear(32, state_size, key=key_list[3]),
+            nn.Linear(32, hidden_state_size, key=key_list[3]),
         ])
 
         # deeper update rule
