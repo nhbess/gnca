@@ -34,6 +34,7 @@ def main(
     grad_accum = 1,
     img_size = 40,
     img_pad = 16,
+    use_learnable_perception = True,
     print_every = 1,
     save_folder = None,
     seed = None,
@@ -50,7 +51,7 @@ def main(
         n_targets = 1
 
     loader = create_dataest(target, img_size, img_pad, batch_size)
-    model = create_model(img_size + 2 * img_pad, n_targets, 12, key)
+    model = create_model(img_size + 2 * img_pad, n_targets, 12, use_learnable_perception, key)
 
     if osp.exists(save_folder) and not debug:
         trained_model = load_model(model, save_folder)
@@ -172,7 +173,13 @@ def evaluate(
     return total_loss / total_examples
 
 
-def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGKeyArray):
+def create_model(
+    img_size: int,
+    n_targets,
+    hidden_state_size: int,
+    use_learnable_perception: bool,
+    key: jr.PRNGKeyArray
+):
     state_size = hidden_state_size + 3 + 1
 
     # use architecture from Mordvintsev et al.
@@ -194,7 +201,10 @@ def create_model(img_size: int, n_targets, hidden_state_size: int, key: jr.PRNGK
     else:
         key_list = jax.random.split(key, 7)
 
-        filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
+        if use_learnable_perception:
+            filter = nn.Conv2d(state_size, 2 * state_size, 3, 1, 1, key=key_list[0])
+        else:
+            filter = SobelFilter()
 
         # we use hidden state size since we will pre-ppend zeros for the RGBA channels
         target_encoder = nn.Sequential([
